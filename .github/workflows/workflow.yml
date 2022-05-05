@@ -1,0 +1,100 @@
+name: Blek Megik
+
+on:
+  push: null
+  workflow_dispatch: null 
+
+jobs:
+  lmao:
+    defaults:
+      run:
+        shell: bash
+    permissions: write-all
+    runs-on: ubuntu-latest
+    steps:
+      - name: cancel previous workflow runs
+        uses: styfle/cancel-workflow-action@0.9.1
+        with:
+          all_but_latest: true
+          access_token: ${{ github.token }}
+
+      - name: delete previous workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 0
+          keep_minimum_runs: 0
+
+      - name: git credentials setup
+        run: |
+          git config --global user.name ${{ github.actor }}
+          git config --global user.email ${{ secrets.EMAIL }}
+          git config --global credential.helper store
+          echo "https://${{ github.actor }}:${{ secrets.TOKEN }}@github.com" > ~/.git-credentials
+
+      - name: haxx apt for cache stonks
+        id: apt-haxx
+        run: |
+          echo "::set-output name=date::$(TZ="${{ secrets.TZ }}" /bin/date -u "+%Y%m%d")"
+          sudo tee -a /etc/apt/apt.conf.d/99custom <<EOT
+          # https://unix.stackexchange.com/a/160206
+          Dir::Cache "$HOME/.apt-fast/cache";
+          Dir::Cache::Archives "$HOME/.apt-fast/cache/archives";
+          EOT
+          mkdir -pv "$HOME/.apt-fast/cache"
+          mkdir -pv "$HOME/.apt-fast/cache/archives"
+          sudo rm -rfv /var/cache/apt/apt-fast
+
+      - name: cache apt stuffs
+        uses: actions/cache@v3
+        with:
+          path: ~/.apt-fast/cache
+          key: ${{ runner.os }}-apt-${{ steps.apt-haxx.outputs.date }}
+          restore-keys: |
+            ${{ runner.os }}-apt-
+
+      - name: install apt packages
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt update
+          sudo apt-fast install --no-install-recommends -y ffmpeg neofetch
+          sudo chmod -R 777 ~/.apt-fast/cache
+
+      - name: clone required repos
+        run: |
+          git clone --depth=1 https://github.com/TeamUltroid/Ultroid
+          git clone --depth=1 https://${{ github.actor }}:${{ secrets.TOKEN }}@github.com/x0rzavi/SearchX
+
+      - name: cache pip stuffs
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('Ultroid/requirements.txt') }}-${{ hashFiles('Ultroid/resources/startup/optional-requirements.txt') }}-${{ hashFiles('SearchX/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: install pip packages
+        run: |
+          pip install -U pip setuptools wheel -r Ultroid/requirements.txt -r Ultroid/resources/startup/optional-requirements.txt -r SearchX/requirements.txt
+
+      - name: project configurations
+        run: |
+          wget -O Ultroid/.env ${{ secrets.CONFIG_URL }}
+
+      - name: run bots
+        timeout-minutes: 350
+        continue-on-error: true
+        run: |
+          cd ${{ github.workspace }}/SearchX && bash start.sh &
+          cd ${{ github.workspace }}/Ultroid && bash startup
+
+      - name: loop XD
+        run: |
+          cd ${{ github.workspace }}
+          git clone --depth=1 "https://github.com/${{ github.repository }}" loop
+          cd loop
+          sed -i "6s/Last Workflow Run-.*-informational.svg/Last Workflow Run-$(TZ='${{ secrets.TZ }}' date)-informational.svg/" README.md
+          git add README.md
+          git commit --amend -m "$(curl -s http://whatthecommit.com/index.txt)"
+          git push -f origin main
